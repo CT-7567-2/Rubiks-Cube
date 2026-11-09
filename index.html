@@ -20,6 +20,8 @@ button.p{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
 .ov{position:absolute;left:12px;font-size:13px;pointer-events:none;opacity:.85}
 #status{top:8px;font-weight:600}
 #hint{bottom:8px;max-width:90%}
+#log{top:30px;max-width:90%;font-family:ui-monospace,Menlo,Consolas,monospace;opacity:.7}
+#not{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 10px}
 </style>
 </head>
 <body>
@@ -31,11 +33,15 @@ button.p{background:var(--acc);color:var(--accfg);border-color:var(--acc)}
   <button id="rst">Zurücksetzen</button>
   <select id="sol" aria-label="Lösungsalgorithmus"></select>
   <button id="slv">Lösen</button>
+  <button id="und">Rückgängig</button>
   <label>Tempo <input type="range" id="spd" min="60" max="600" value="400"></label>
+  <input id="not" type="text" placeholder="Notation: R U R' U'" size="18" autocomplete="off" autocapitalize="characters" spellcheck="false">
+  <button id="play">Abspielen</button>
 </div>
 <div id="view">
   <div class="ov" id="status"></div>
-  <div class="ov" id="hint">Auf den Würfel ziehen: Schicht drehen · Daneben ziehen: Ansicht drehen · Mausrad oder Zwei-Finger-Geste: Zoom</div>
+  <div class="ov" id="log"></div>
+  <div class="ov" id="hint">Auf den Würfel ziehen: Schicht drehen · Daneben ziehen: Ansicht drehen · Zoom: Mausrad oder Zwei-Finger-Geste · Tasten: R L U D F B (Shift = Gegenrichtung, Ziffer davor = tiefere Schicht), Pfeile = Ansicht, Leertaste = Mischen, Rücktaste = Rückgängig</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -88,7 +94,7 @@ scene.add(root);
 const bodyGeo=new THREE.BoxGeometry(.98,.98,.98),bodyMat=new THREE.MeshBasicMaterial({color:0x151515});
 const stGeo=new THREE.PlaneGeometry(.84,.84),stMats={};
 
-let cube,history=[],queue=[],anim=null,count=0,speed=260;
+let cube,history=[],queue=[],log=[],anim=null,count=0,speed=260,depth=1;
 let yaw=.8,pitch=.5,zoom=1;
 
 function place(c){
@@ -98,7 +104,7 @@ function place(c){
 }
 function build(n){
   while(root.children.length)root.remove(root.children[0]);
-  cube=new Cube(n);history=[];queue=[];anim=null;count=0;
+  cube=new Cube(n);history=[];queue=[];log=[];$("log").textContent="";anim=null;count=0;
   for(const c of cube.cubies){
     const g=new THREE.Group();c.obj=g;
     const b=new THREE.Mesh(bodyGeo,bodyMat);b.userData.c=c;g.add(b);
@@ -123,7 +129,7 @@ function resize(){renderer.setSize(view.clientWidth,view.clientHeight);updateCam
 new ResizeObserver(resize).observe(view);
 
 function updateStatus(){
-  statusEl.textContent=`${cube.n}×${cube.n}×${cube.n} · Züge: ${count} · `+
+  statusEl.textContent=`${cube.n}×${cube.n}×${cube.n} · Züge: ${count} · `+(depth>1?`Schicht ${depth} · `:"")+
     (anim||queue.length?"…":(cube.isSolved()?"gelöst ✓":"verdreht"));
 }
 
@@ -141,6 +147,7 @@ function finish(){
   const last=history[history.length-1];
   if(last&&last[0]===a&&last[1]===l&&last[2]===-d)history.pop();else history.push([a,l,d]);
   if(!m[3])count++;
+  log.push(notate(a,l,d));$("log").textContent=log.slice(-14).join(" ");
   anim=null;updateStatus();
 }
 function tick(t){
@@ -206,6 +213,66 @@ view.addEventListener("pointerup",up);view.addEventListener("pointercancel",up);
 view.addEventListener("wheel",e=>{
   e.preventDefault();zoom=Math.min(3,Math.max(.4,zoom*(e.deltaY>0?1.08:.92)));updateCam();
 },{passive:false});
+
+/* Notation und Tastatur: [Achse, Außenseite (1 = positive Seite), Richtung im Uhrzeigersinn] */
+const FACE={R:[0,1,-1],L:[0,0,1],U:[1,1,-1],D:[1,0,1],F:[2,1,-1],B:[2,0,1]};
+function faceMove(f,dp,inv){
+  const[a,outer,dir]=FACE[f],n=cube.n;
+  if(dp>n)return null;
+  return[a,outer?n-dp:dp-1,inv?-dir:dir];
+}
+function notate(a,l,d){
+  const n=cube.n,dp=n-l,dn=l+1,pos=dp<=dn,k=pos?dp:dn;
+  const letter=pos?"RUF"[a]:"LDB"[a],cw=pos?-1:1;
+  return(k>1?k:"")+letter+(d===cw?"":"'");
+}
+function parse(text){
+  const out=[];
+  for(const tok of text.replace(/[’‘`]/g,"'").trim().split(/\s+/).filter(Boolean)){
+    const m=/^(\d?)([RLUDFB])(2|')?$/.exec(tok.toUpperCase());
+    if(!m)return null;
+    const mv=faceMove(m[2],+m[1]||1,m[3]==="'");
+    if(!mv)return null;
+    out.push(mv);if(m[3]==="2")out.push(mv);
+  }
+  return out;
+}
+function play(){
+  const mv=parse($("not").value);
+  if(!mv){statusEl.textContent="Ungültige Notation. Erlaubt: R L U D F B, optional mit ' oder 2, z. B. R U2 F'";return;}
+  for(const m of mv)queue.push(m);
+  updateStatus();
+}
+function undo(){
+  if(anim||queue.length||!history.length)return;
+  const[a,l,d]=history[history.length-1];
+  queue.push([a,l,-d]);updateStatus();
+}
+addEventListener("keydown",e=>{
+  if(e.target.matches("input,select,textarea")||e.ctrlKey||e.metaKey||e.altKey)return;
+  const c=e.code;
+  if(/^Digit[1-9]$/.test(c)){depth=+c.slice(5);updateStatus();return;}
+  if(c.startsWith("Key")&&FACE[c[3]]){
+    const mv=faceMove(c[3],depth,e.shiftKey);depth=1;
+    if(mv)queue.push(mv);
+    updateStatus();e.preventDefault();return;
+  }
+  let used=true;
+  if(c==="ArrowLeft")yaw+=.15;
+  else if(c==="ArrowRight")yaw-=.15;
+  else if(c==="ArrowUp")pitch=Math.max(-1.5,pitch-.12);
+  else if(c==="ArrowDown")pitch=Math.min(1.5,pitch+.12);
+  else if(e.key==="+"||e.key==="=")zoom=Math.max(.4,zoom*.9);
+  else if(e.key==="-")zoom=Math.min(3,zoom*1.1);
+  else if(c==="Space")scramble();
+  else if(c==="Backspace")undo();
+  else used=false;
+  if(used){e.preventDefault();updateCam();}
+});
+$("und").onclick=undo;
+$("play").onclick=play;
+$("not").addEventListener("keydown",e=>{if(e.key==="Enter")play();});
+document.addEventListener("click",e=>{if(e.target.matches("button"))e.target.blur();});
 
 /* Schaltflächen */
 const rand=k=>Math.floor(Math.random()*k);
