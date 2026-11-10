@@ -76,14 +76,257 @@ class Cube{
   }
 }
 
+/* ================= Anfängermethode für den 3×3 =================
+   Arbeitet auf einem Feld aus 54 Sticker-Farben. Jeder Zug ist eine Permutation dieser Positionen
+   (aus dem Würfelmodell abgeleitet). Ablauf: 1. Kreuz (optimal per Breitensuche-Tabelle),
+   2. untere Ecken, 3. mittlere Kanten, 4. oberes Kreuz, 5. obere Ecken drehen, 6. oben sortieren.
+   Schritte 2 bis 6 nutzen iterative Tiefensuche über kurze Standardformeln (Makros). */
+let BT=null;
+function beginnerTables(){
+  if(BT)return BT;
+  const FN=["1,0,0","-1,0,0","0,1,0","0,-1,0","0,0,1","0,0,-1"]; // R L U D F B
+  const key=(p,w)=>p+"|"+w,nz=p=>p.filter(v=>v!==0).length;
+  const slots=[],idx={};
+  for(const c of new Cube(3).cubies)for(const s of c.st){idx[key(c.p,s.n0)]=slots.length;slots.push({p:c.p,n:s.n0});}
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const names=[],P=[];
+  for(const f of"RLUDFB")for(const t of["","2","'"]){
+    names.push(f+t);
+    const cb=new Cube(3),[a,outer,dir]=FACE[f],l=outer?2:0,d=t==="'"?-dir:dir,orig=cb.cubies.map(c=>c.p),perm=[];
+    cb.move(a,l,d);if(t==="2")cb.move(a,l,d);
+    cb.cubies.forEach((c,ci)=>c.st.forEach(s=>{perm[idx[key(orig[ci],s.n0)]]=idx[key(c.p,world(c,s))];}));
+    P.push(perm);
+  }
+  const tgt=slots.map(s=>FN.indexOf(s.n+""));
+  const sel=f=>slots.map((s,i)=>f(s)?i:-1).filter(i=>i>=0);
+  const at=(x,y,z)=>sel(s=>s.p[0]===x&&s.p[1]===y&&s.p[2]===z);
+  const mac=(str,u)=>{
+    const moves=str.split(" ").map(t=>names.indexOf(t)),perm=slots.map((_,i)=>i);
+    for(const m of moves)for(let i=0;i<54;i++)perm[i]=P[m][perm[i]];
+    return{moves,perm,u};
+  };
+  const rotS=(s,k)=>s.replace(/[FRBL]/g,ch=>{for(let i=0;i<k;i++)ch={F:"R",R:"B",B:"L",L:"F"}[ch];return ch;});
+  const rots=s=>[0,1,2,3].map(k=>mac(rotS(s,k),false));
+  const Um=["U","U'","U2"].map(s=>mac(s,true));
+  const sets={
+    corner:[...Um,...rots("R U R' U'")],
+    middle:[...Um,...rots("U R U' R' U' F' U F"),...rots("U' L' U L U F U' F'")],
+    topcross:[...Um,...rots("F R U R' U' F'")],
+    orient:[...Um,...rots("R U R' U R U2 R'"),...rots("R U2 R' U' R U' R'")],
+    pll:[...Um,...rots("R U' R U R U R U' R' U' R2"),...rots("R U R' U' R' F R2 U' R' U' R U R' F'")]
+  };
+  /* Kreuz-Tabelle: Positionen der 8 Kreuz-Sticker, Breitensuche vom gelösten Zustand */
+  const cp=[[[0,-2,2],[0,0,1],4],[[2,-2,0],[1,0,0],0],[[0,-2,-2],[0,0,-1],5],[[-2,-2,0],[-1,0,0],1]];
+  const start=[];for(const[p,n]of cp)start.push(idx[key(p,[0,-1,0])],idx[key(p,n)]);
+  const enc=v=>v.reduce((k,s)=>k*54+s,0);
+  const dist=new Map([[enc(start),0]]);
+  let fr=[start];
+  for(let d=1;fr.length;d++){
+    const nx=[];
+    for(const v of fr)for(let m=0;m<18;m++){const pm=P[m],w=v.map(s=>pm[s]),k=enc(w);if(!dist.has(k)){dist.set(k,d);nx.push(w);}}
+    fr=nx;
+  }
+  const edges={};
+  slots.forEach((s,i)=>{if(nz(s.p)===2)(edges[s.p+""]=edges[s.p+""]||[]).push(i);});
+  const edgePairs=Object.values(edges);
+  const crossMoves=col=>{
+    let v=[];
+    for(const[,,sc]of cp)for(const e of edgePairs){
+      const a=col[e[0]],b=col[e[1]];
+      if(a===3&&b===sc){v.push(e[0],e[1]);break;}
+      if(b===3&&a===sc){v.push(e[1],e[0]);break;}
+    }
+    const out=[];let d=dist.get(enc(v));
+    while(d>0){
+      for(let m=0;m<18;m++){const w=v.map(s=>P[m][s]);if(dist.get(enc(w))===d-1){out.push(m);v=w;d--;break;}}
+    }
+    return out;
+  };
+  return BT={FN,key,idx,world,names,P,tgt,sel,at,sets,crossMoves,nz};
+}
+
+function beginnerSolve(c3){
+  if(c3.n!==3)throw new Error("Dieser Solver funktioniert nur auf dem 3×3.");
+  if(c3.isSolved())return[];
+  const T=beginnerTables(),{FN,key,idx,world,names,P,tgt,sel,at,sets,nz}=T;
+  let col=new Uint8Array(54);
+  const c2f={};
+  for(const c of c3.cubies)if(c.st.length===1)c2f[c.st[0].c]=FN.indexOf(world(c,c.st[0])+"");
+  for(const c of c3.cubies)for(const s of c.st)col[idx[key(c.p,world(c,s))]]=c2f[s.c];
+  const out=[];
+  const apply=ms=>{for(const m of ms){const n=new Uint8Array(54);for(let i=0;i<54;i++)n[P[m][i]]=col[i];col=n;out.push(m);}};
+  const goalOf=list=>c=>list.every(i=>c[i]===tgt[i]);
+  const search=(mc,goal,maxD)=>{
+    const buf=Array.from({length:maxD+1},()=>new Uint8Array(54)),path=[];
+    buf[0].set(col);
+    const rec=(k,last,L)=>{
+      if(goal(buf[k]))return k;
+      if(k===L)return -1;
+      for(let m=0;m<mc.length;m++){
+        if(mc[m].u&&last>=0&&mc[last].u)continue;
+        const pm=mc[m].perm,a=buf[k],b=buf[k+1];
+        for(let i=0;i<54;i++)b[pm[i]]=a[i];
+        path[k]=m;
+        const r=rec(k+1,m,L);if(r>=0)return r;
+      }
+      return -1;
+    };
+    for(let L=0;L<=maxD;L++){const r=rec(0,-1,L);if(r>=0){apply(path.slice(0,r).flatMap(m=>mc[m].moves));return;}}
+    throw new Error("Solver: keine Lösung gefunden");
+  };
+  apply(T.crossMoves(col));
+  const crossS=sel(s=>s.p[1]===-2&&nz(s.p)===2),dS=sel(s=>s.p[1]===-2);
+  const pos=[[2,2],[2,-2],[-2,-2],[-2,2]];
+  let list=crossS;
+  for(const[x,z]of pos){list=list.concat(at(x,-2,z));search(sets.corner,goalOf(list),8);}
+  list=dS;
+  for(const[x,z]of pos){list=list.concat(at(x,0,z));search(sets.middle,goalOf(list),7);}
+  search(sets.topcross,goalOf(sel(s=>s.p[1]===2&&s.n[1]===1&&nz(s.p)===2)),6);
+  search(sets.orient,goalOf(sel(s=>s.n[1]===1)),7);
+  search(sets.pll,c=>c.every((v,i)=>v===tgt[i]),7);
+  const res=[];
+  for(const m of out){
+    const[a,outer,dir]=FACE[names[m][0]],l=outer?2:0,t=names[m].slice(1),d=t==="'"?-dir:dir;
+    res.push([a,l,d]);if(t==="2")res.push([a,l,d]);
+  }
+  return res;
+}
+
+/* ================= 2×2: Anfängermethode und optimale Lösung =================
+   Der 2×2 hat keine festen Zentren. Darum wird eine Ecke als Referenz festgehalten (sie liegt dort,
+   wo sie gerade ist); gedreht werden nur die drei Seiten, die sie nicht berühren. Diese heißen hier
+   R, U, F, dadurch gelten die Standardformeln unabhängig davon, wie der Würfel gerade liegt. */
+const TW={},NM=["R","R2","R'","U","U2","U'","F","F2","F'"];
+const twoAp=(s,pm)=>{const n=new Uint8Array(24);for(let i=0;i<24;i++)n[pm[i]]=s[i];return n;};
+function twoSetup(c2){
+  if(c2.n!==2)throw new Error("Dieser Solver funktioniert nur auf dem 2×2.");
+  const FN=["1,0,0","-1,0,0","0,1,0","0,-1,0","0,0,1","0,0,-1"],key=(p,w)=>p+"|"+w;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  if(!TW.slots){
+    TW.slots=[];TW.idx={};
+    for(const c of new Cube(2).cubies)for(const s of c.st){TW.idx[key(c.p,s.n0)]=TW.slots.length;TW.slots.push({p:c.p,n:s.n0});}
+  }
+  const{slots,idx}=TW;
+  const home=["-1,0,0","0,-1,0","0,0,-1"].map(k=>COL[k]);
+  const ref=c2.cubies.find(c=>home.every(h=>c.st.some(s=>s.c===h)));
+  const q=ref.p,sd=q.map(v=>-v);
+  const ax=sd[0]*sd[1]*sd[2]>0?{R:0,U:1,F:2}:{R:0,U:2,F:1};
+  const faceOf={};
+  for(const s of ref.st){
+    const w=world(ref,s);
+    faceOf[s.c]=FN.indexOf(w+"");
+    faceOf[COL[s.n0.map(v=>-v).join()]]=FN.indexOf(w.map(v=>-v)+"");
+  }
+  const col=new Uint8Array(24);
+  for(const c of c2.cubies)for(const s of c.st)col[idx[key(c.p,world(c,s))]]=faceOf[s.c];
+  const tgt=slots.map(s=>FN.indexOf(s.n+"")),qk=q+"";
+  if(!TW[qk]){
+    const P=[],info=[];
+    for(const L of"RUF")for(const t of["","2","'"]){
+      const a=ax[L],side=sd[a],l=side>0?1:0,cw=side>0?-1:1,d=t==="'"?-cw:cw;
+      const cb=new Cube(2),orig=cb.cubies.map(c=>c.p),perm=[];
+      cb.move(a,l,d);if(t==="2")cb.move(a,l,d);
+      cb.cubies.forEach((c,ci)=>c.st.forEach(s=>{perm[idx[key(orig[ci],s.n0)]]=idx[key(c.p,world(c,s))];}));
+      P.push(perm);info.push([a,l,d,t==="2"?2:1]);
+    }
+    TW[qk]={P,info};
+  }
+  const g=(v,L)=>v[ax[L]]*sd[ax[L]];
+  const can=slots.map(s=>({p:{R:g(s.p,"R"),U:g(s.p,"U"),F:g(s.p,"F")},n:{R:g(s.n,"R"),U:g(s.n,"U"),F:g(s.n,"F")}}));
+  return{col,tgt,can,qk,P:TW[qk].P,info:TW[qk].info};
+}
+const twoOut=(S,ms)=>{const r=[];for(const m of ms){const[a,l,d,k]=S.info[m];for(let i=0;i<k;i++)r.push([a,l,d]);}return r;};
+
+/* Optimal: Tabelle bis Tiefe 6 vom Ziel aus, Suche bis Tiefe 5 vom aktuellen Zustand aus */
+function twoOptimal(c2){
+  if(c2.isSolved())return[];
+  const S=twoSetup(c2),P=S.P,mk=a=>String.fromCharCode(...a),inv=m=>m-m%3+(m%3===0?2:m%3===2?0:1),tk="T"+S.qk;
+  if(!TW[tk]){
+    const tab=new Map([[mk(S.tgt),[0,-1]]]);let fr=[Uint8Array.from(S.tgt)];
+    for(let d=1;d<=6;d++){
+      const nx=[];
+      for(const s of fr)for(let m=0;m<9;m++){const n=twoAp(s,P[m]),k=mk(n);if(!tab.has(k)){tab.set(k,[d,inv(m)]);nx.push(n);}}
+      fr=nx;
+    }
+    TW[tk]=tab;
+  }
+  const tab=TW[tk],nodes=[{s:S.col,par:-1,m:-1,d:0}],seen=new Set([mk(S.col)]);
+  let best=1e9,bi=-1;
+  for(let i=0;i<nodes.length;i++){
+    const nd=nodes[i],t=tab.get(mk(nd.s));
+    if(t&&nd.d+t[0]<best){best=nd.d+t[0];bi=i;}
+    if(nd.d<5)for(let m=0;m<9;m++){const n=twoAp(nd.s,P[m]),k=mk(n);if(!seen.has(k)){seen.add(k);nodes.push({s:n,par:i,m,d:nd.d+1});}}
+  }
+  if(bi<0)throw new Error("Keine Lösung gefunden");
+  const ms=[];
+  for(let i=bi;nodes[i].par>=0;i=nodes[i].par)ms.unshift(nodes[i].m);
+  let s=nodes[bi].s,t=tab.get(mk(s));
+  while(t[0]>0){ms.push(t[1]);s=twoAp(s,P[t[1]]);t=tab.get(mk(s));}
+  return twoOut(S,ms);
+}
+
+/* Anfängermethode: 1. untere Ebene, 2. obere Seite drehen, 3. obere Ecken sortieren */
+function twoBeginner(c2){
+  if(c2.isSolved())return[];
+  const S=twoSetup(c2),P=S.P,can=S.can,tgt=S.tgt,out=[];
+  let col=S.col;
+  const mac=str=>{
+    const moves=str.split(" ").map(t=>NM.indexOf(t)),perm=[...Array(24).keys()];
+    for(const m of moves)for(let i=0;i<24;i++)perm[i]=P[m][perm[i]];
+    return{moves,perm,f:moves.length===1?Math.floor(moves[0]/3):-1};
+  };
+  const goal=list=>c=>list.every(i=>c[i]===tgt[i]);
+  const search=(mc,gl,maxD)=>{
+    const buf=Array.from({length:maxD+1},()=>new Uint8Array(24)),path=[];
+    buf[0].set(col);
+    const rec=(k,last,L)=>{
+      if(gl(buf[k]))return k;
+      if(k===L)return -1;
+      for(let m=0;m<mc.length;m++){
+        if(last>=0&&mc[m].f>=0&&mc[m].f===mc[last].f)continue;
+        const pm=mc[m].perm,a=buf[k],b=buf[k+1];
+        for(let i=0;i<24;i++)b[pm[i]]=a[i];
+        path[k]=m;
+        const r=rec(k+1,m,L);if(r>=0)return r;
+      }
+      return -1;
+    };
+    for(let L=0;L<=maxD;L++){
+      const r=rec(0,-1,L);
+      if(r>=0){for(const m of path.slice(0,r).flatMap(m=>mc[m].moves)){col=twoAp(col,P[m]);out.push(m);}return;}
+    }
+    throw new Error("Solver: keine Lösung gefunden");
+  };
+  const at=(r,u,f)=>can.map((s,i)=>s.p.R===r&&s.p.U===u&&s.p.F===f?i:-1).filter(i=>i>=0);
+  const basics=NM.map(mac),Um=["U","U2","U'"].map(mac);
+  let list=[];
+  for(const[r,f]of[[1,1],[-1,1],[1,-1]]){list=list.concat(at(r,-1,f));search(basics,goal(list),9);}
+  const top=can.map((s,i)=>s.n.U===1?i:-1).filter(i=>i>=0);
+  search([...Um,...["R U R' U R U2 R'","R U2 R' U' R U' R'","F R U R' U' F'"].map(mac)],goal(top),7);
+  search([...Um,...["R U R' U' R' F R2 U' R' U' R U R' F'","F R U' R' U' R U R' F' R U R' U' R' F R F'"].map(mac)],c=>c.every((v,i)=>v===tgt[i]),6);
+  return twoOut(S,out);
+}
+
 /* ================= Solver-Schnittstelle =================
    Jeder Algorithmus: (cube, history) => Liste von Viertelzügen [[achse, schicht, richtung ±1], …]
    history = zusammengefasster Verlauf [[achse, schicht, 1 | 2 | -1], …] (nur für den Test-Solver gedacht)
    Neue Algorithmen einfach hier eintragen, sie erscheinen automatisch im Auswahlmenü. */
 const Solvers={
+  "Anfängermethode (nur 3×3)":(cube)=>beginnerSolve(cube),
+  "Anfängermethode (nur 2×2)":(cube)=>twoBeginner(cube),
+  "Optimal per Breitensuche (nur 2×2)":(cube)=>twoOptimal(cube),
   "Verlauf rückwärts (Test)":(cube,hist)=>cube.isSolved()?[]:
     hist.slice().reverse().flatMap(([a,l,t])=>t===2?[[a,l,1],[a,l,1]]:[[a,l,-t]])
 };
+const SolverSizes={"Anfängermethode (nur 3×3)":[3],"Anfängermethode (nur 2×2)":[2],"Optimal per Breitensuche (nur 2×2)":[2]};
+function fillSolvers(){
+  const sel=$("sol"),keep=sel.value;sel.textContent="";
+  for(const name of Object.keys(Solvers)){
+    if(SolverSizes[name]&&!SolverSizes[name].includes(cube.n))continue;
+    const o=document.createElement("option");o.textContent=name;sel.appendChild(o);
+  }
+  if([...sel.options].some(o=>o.value===keep))sel.value=keep;
+}
 
 /* ================= Darstellung (three.js) ================= */
 const $=id=>document.getElementById(id);
@@ -118,7 +361,7 @@ function build(n){
     }
     place(c);root.add(g);
   }
-  updateCam();updateStatus();
+  fillSolvers();updateCam();updateStatus();
 }
 function updateCam(){
   const asp=Math.max(.2,view.clientWidth/Math.max(1,view.clientHeight));
@@ -299,14 +542,16 @@ function scramble(){
   }
   updateStatus();
 }
-for(const name of Object.keys(Solvers)){const o=document.createElement("option");o.textContent=name;$("sol").appendChild(o);}
 $("size").onchange=e=>build(+e.target.value);
 $("scr").onclick=scramble;
 $("rst").onclick=()=>build(cube.n);
 $("slv").onclick=()=>{
   if(anim||queue.length)return;
-  for(const m of Solvers[$("sol").value](cube,history))queue.push(m);
-  updateStatus();
+  statusEl.textContent="Berechne …";
+  setTimeout(()=>{
+    try{for(const m of Solvers[$("sol").value](cube,history))queue.push(m);updateStatus();}
+    catch(err){statusEl.textContent=err.message;}
+  },30);
 };
 $("spd").oninput=e=>{speed=660-(+e.target.value);};
 speed=660-400;
