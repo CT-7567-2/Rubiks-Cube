@@ -324,6 +324,324 @@ function twoBeginner(c2){
   return res;
 }
 
+/* ================= Reduktion, Schritt 1: Zentren (ab 4×4) =================
+   Zentren-Felder bleiben unter allen Zügen Zentren-Felder. Für jede Würfelgröße werden alle
+   Kommutatoren [A,B] (zwei Viertelzüge auf verschiedenen Achsen) darauf untersucht, ob sie genau
+   drei Zentren-Felder im Kreis tauschen. Gierig wird dann immer der Dreierzyklus gewählt (ggf. mit
+   1–2 Zügen Vorbereitung und deren Umkehrung), der am meisten Felder in die richtige Farbe bringt. */
+const CT={};
+function centerTables(N){
+  if(CT[N])return CT[N];
+  const key=(p,w)=>p+"|"+w;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const cells=[],cidx={};
+  for(const c of new Cube(N).cubies)if(c.st.length===1){cidx[key(c.p,c.st[0].n0)]=cells.length;cells.push({p:c.p,n:c.st[0].n0});}
+  const C=cells.length,mv=[],cm=[];
+  for(let a=0;a<3;a++)for(let l=0;l<N;l++)for(const d of[1,-1]){   // Index m: (a*N+l)*2 + (d>0?0:1), m^1 = Umkehrzug
+    const cb=new Cube(N),orig=cb.cubies.map(c=>c.p),perm=new Int16Array(C);
+    cb.move(a,l,d);
+    cb.cubies.forEach((c,i)=>{if(c.st.length===1)perm[cidx[key(orig[i],c.st[0].n0)]]=cidx[key(c.p,world(c,c.st[0]))];});
+    mv.push([a,l,d]);cm.push(perm);
+  }
+  const K=[],seen=new Set();
+  for(let X=0;X<mv.length;X++)for(let Y=0;Y<mv.length;Y++){
+    if(mv[X][0]===mv[Y][0])continue;
+    for(let B=0;B<mv.length;B++){
+      const seq=[X,Y,X^1,B,X,Y^1,X^1,B^1],f=c=>{for(const m of seq)c=cm[m][c];return c;},moved=[];
+      for(let c=0;c<C;c++)if(f(c)!==c){moved.push(c);if(moved.length>3)break;}
+      if(moved.length!==3)continue;
+      const x0=moved[0],x1=f(x0),x2=f(x1);
+      if(seen.has([x0,x1,x2].join())||seen.has([x1,x2,x0].join())||seen.has([x2,x0,x1].join()))continue;
+      seen.add([x0,x1,x2].join());K.push({x:[x0,x1,x2],seq});
+    }
+  }
+  return CT[N]={N,cells,C,mv,cm,K};
+}
+
+function centersSolve(cb){
+  const N=cb.n;
+  if(N<4)throw new Error("Zentren-Schritt gibt es erst ab 4×4.");
+  const T=centerTables(N),{cells,C,mv,cm,K}=T;
+  const FN=["1,0,0","-1,0,0","0,1,0","0,-1,0","0,0,1","0,0,-1"];
+  const key=(p,w)=>p+"|"+w;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const cidx={};cells.forEach((c,i)=>{cidx[key(c.p,c.n)]=i;});
+  const home={};FN.forEach((k,i)=>{home[COL[k]]=i;});
+  const cur=new Array(C).fill(0);
+  for(const c of cb.cubies)if(c.st.length===1)cur[cidx[key(c.p,world(c,c.st[0]))]]=home[c.st[0].c];
+  /* alle 24 Drehungen des Farbschemas, wähle die mit den meisten schon passenden Feldern */
+  const gen=[0,1,2].map(a=>FN.map(k=>FN.indexOf(rot(k.split(",").map(Number),a,1).join())));
+  const rots=new Map([["0,1,2,3,4,5",[0,1,2,3,4,5]]]);
+  for(const r of[...rots.values()])for(const g of gen){const n=r.map(i=>g[i]),k=n.join();if(!rots.has(k)){rots.set(k,n);}}
+  for(let i=0;i<30;i++)for(const r of[...rots.values()])for(const g of gen){const n=r.map(x=>g[x]),k=n.join();if(!rots.has(k))rots.set(k,n);}
+  const tgt=cells.map(c=>FN.indexOf(c.n+""));
+  let bestR=null,bs=-1;
+  /* Ungerade Würfel: die 6 echten Mittelstücke legen das Farbschema fest und lassen sich nicht umordnen */
+  const core=cells.map((c,i)=>c.p.filter(v=>v===0).length===2?i:-1).filter(i=>i>=0);
+  for(const r of rots.values()){
+    if(core.some(i=>r[cur[i]]!==tgt[i]))continue;
+    let s=0;for(let i=0;i<C;i++)if(r[cur[i]]===tgt[i])s++;
+    if(s>bs){bs=s;bestR=r;}
+  }
+  if(!bestR)throw new Error("Zentren: Farbschema nicht bestimmbar");
+  let col=Uint8Array.from(cur,v=>bestR[v]);
+  const delta=(a,b,d)=>(col[a]===tgt[b])-(col[b]===tgt[b])+(col[b]===tgt[d])-(col[d]===tgt[d])+(col[d]===tgt[a])-(col[a]===tgt[a]);
+  const pre=(S,x)=>{for(let i=S.length-1;i>=0;i--)x=cm[S[i]^1][x];return x;};
+  const out=[];
+  const apply=m=>{const n=new Uint8Array(C),p=cm[m];for(let i=0;i<C;i++)n[p[i]]=col[i];col=n;out.push(m);};
+  const done=()=>col.every((v,i)=>v===tgt[i]);
+  while(!done()){
+    let best=0,pick=null;
+    const tryS=S=>{
+      for(let k=0;k<K.length;k++){
+        const x=K[k].x,a=pre(S,x[0]),b=pre(S,x[1]),d=pre(S,x[2]),v=delta(a,b,d);
+        if(v>best){best=v;pick=[S,k];if(v===3)return true;}
+      }
+      return false;
+    };
+    if(!tryS([])){
+      let hit=false;
+      for(let s=0;s<mv.length&&!hit;s++)hit=tryS([s]);
+      if(best<2&&!hit)for(let s=0;s<mv.length&&!hit;s++)for(let t=0;t<mv.length&&!hit;t++)hit=tryS([s,t]);
+    }
+    if(!pick)throw new Error("Zentren: keine Verbesserung gefunden");
+    const[S,k]=pick;
+    for(const m of S)apply(m);
+    for(const m of K[k].seq)apply(m);
+    for(const m of S.slice().reverse())apply(m^1);
+  }
+  return out.map(m=>mv[m]);
+}
+
+/* ================= Reduktion, Schritt 2: Kanten (ab 4×4) =================
+   Wie bei den Zentren, nur auf den Kanten-Stickern: Gesucht werden Zugfolgen der Form
+   X Y X' B X Y' X' B', die alle Zentren unverändert lassen und Kantenstücke im Dreierzyklus tauschen. */
+const WT={};
+function wingTables(N){
+  if(WT[N])return WT[N];
+  const key=(p,w)=>p+"|"+w;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const cells=[],cidx={};      // Zentren (kind 0) und Kantensticker (kind 1)
+  for(const c of new Cube(N).cubies)if(c.st.length<3)for(const s of c.st){cidx[key(c.p,s.n0)]=cells.length;cells.push({p:c.p,n:s.n0,k:c.st.length-1});}
+  const C=cells.length,mv=[],cm=[];
+  for(let a=0;a<3;a++)for(let l=0;l<N;l++)for(const d of[1,-1]){
+    const cb=new Cube(N),orig=cb.cubies.map(c=>c.p),perm=new Int16Array(C).fill(-1);
+    cb.move(a,l,d);
+    cb.cubies.forEach((c,i)=>{if(c.st.length<3)for(const s of c.st)perm[cidx[key(orig[i],s.n0)]]=cidx[key(c.p,world(c,s))];});
+    mv.push([a,l,d]);cm.push(perm);
+  }
+  const centerIdx=[],wingIdx=[],midIdx=[];
+  cells.forEach((c,i)=>{if(c.k===0)centerIdx.push(i);else if(!c.p.includes(0))wingIdx.push(i);else midIdx.push(i);});   // Mittelkanten ungerader Würfel gehören zum 3×3-Schritt
+  const face=cells.map(c=>c.n+""),MAXM=8,K=[],seen=new Set();
+  const half=m=>[m,m];
+  for(let X=0;X<mv.length;X++)for(let Y=0;Y<mv.length;Y++){
+    if(mv[X][0]===mv[Y][0])continue;
+    for(let B=0;B<mv.length;B++)for(const bs of[[B],half(B)]){
+      if(mv[B][0]===mv[X][0]&&mv[B][0]===mv[Y][0])continue;
+      const seq=[X,Y,X^1,...bs,X,Y^1,X^1,...bs.map(m=>m^1)];
+      const f=c=>{for(const m of seq)c=cm[m][c];return c;};
+      let ok=true;
+      for(const c of centerIdx)if(face[f(c)]!==face[c]){ok=false;break;}
+      if(ok)for(const c of midIdx)if(f(c)!==c){ok=false;break;}
+      if(!ok)continue;
+      const moved=[];
+      for(const c of wingIdx)if(f(c)!==c){moved.push(c);if(moved.length>MAXM){ok=false;break;}}
+      if(!ok||moved.length===0)continue;
+      const cyc=[],used=new Set();
+      for(const c of moved){
+        if(used.has(c))continue;
+        const t=[c];used.add(c);
+        for(let x=f(c);x!==c;x=f(x)){t.push(x);used.add(x);}
+        cyc.push(t);
+      }
+      const id=cyc.map(t=>t.join()).sort().join("|");
+      if(seen.has(id))continue;seen.add(id);
+      K.push({cyc,seq});
+    }
+  }
+  /* Zusätzlich: kurze Folgen aus Halbdrehungen (liefern z. B. Vertauschungen zweier Kantenstücke) */
+  const hm=[];for(let m=0;m<mv.length;m+=2){const p=new Int16Array(C),q=cm[m];for(let i=0;i<C;i++)p[i]=q[q[i]];hm.push({p,mi:m});}
+  const D=N<=5?6:5;
+  const dfs=(f,seq,last,depth)=>{
+    if(seq.length>=2){
+      let ok=true;
+      for(const c of centerIdx)if(face[f[c]]!==face[c]){ok=false;break;}
+      if(ok)for(const c of midIdx)if(f[c]!==c){ok=false;break;}
+      if(ok){
+        const moved=[];
+        for(const c of wingIdx)if(f[c]!==c){moved.push(c);if(moved.length>8){ok=false;break;}}
+        if(ok&&moved.length>0){
+          const cyc=[],used=new Set();
+          for(const c of moved){if(used.has(c))continue;const t=[c];used.add(c);for(let x=f[c];x!==c;x=f[x]){t.push(x);used.add(x);}cyc.push(t);}
+          if(cyc.some(t=>t.length!==3)){
+            const id=cyc.map(t=>t.slice().sort((a,b)=>a-b).join()).sort().join("|");
+            if(!seen.has(id)){seen.add(id);K.push({cyc,seq:seq.flatMap(i=>[hm[i].mi,hm[i].mi])});}
+          }
+        }
+      }
+    }
+    if(depth===0)return;
+    for(let i=0;i<hm.length;i++){
+      if(i===last)continue;
+      const g=new Int16Array(C),p=hm[i].p;
+      for(let c=0;c<C;c++)g[c]=p[f[c]];
+      seq.push(i);dfs(g,seq,i,depth-1);seq.pop();
+    }
+  };
+  dfs(Int16Array.from({length:C},(_,i)=>i),[],-1,D);
+  return WT[N]={N,cells,C,mv,cm,K,wingIdx};
+}
+
+function wingsSolve(cb,swap){
+  const N=cb.n;
+  if(N<4)throw new Error("Kanten-Schritt gibt es erst ab 4×4.");
+  const T=wingTables(N),{cells,C,mv,cm,K,wingIdx}=T;
+  const FN=["1,0,0","-1,0,0","0,1,0","0,-1,0","0,0,1","0,0,-1"];
+  const key=(p,w)=>p+"|"+w;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const cidx={};cells.forEach((c,i)=>{cidx[key(c.p,c.n)]=i;});
+  /* Farbe -> Seite aus den (gelösten) Zentren */
+  const faceOf={};
+  for(const c of cb.cubies)if(c.st.length===1){
+    const f=FN.indexOf(world(c,c.st[0])+"");
+    if(faceOf[c.st[0].c]!==undefined&&faceOf[c.st[0].c]!==f)throw new Error("Kanten: Zentren müssen zuerst gelöst sein.");
+    faceOf[c.st[0].c]=f;
+  }
+  const col=new Uint8Array(C),tgt=cells.map(c=>FN.indexOf(c.n+""));
+  if(N%2===1){
+    const mc={};
+    for(const c of cb.cubies)if(c.st.length===2&&c.p.includes(0))for(const s of c.st)mc[c.p+"|"+world(c,s)]=s.c;
+    cells.forEach((c,i)=>{if(c.k===1&&!c.p.includes(0))tgt[i]=faceOf[mc[c.p.map(v=>Math.abs(v)===N-1?v:0)+"|"+c.n]];});
+  }
+  /* swap: die Kanten UF und UB sollen vertauscht liegen (nötig, wenn die Ecken eine ungerade Permutation haben) */
+  if(swap)cells.forEach((c,i)=>{if(c.k===1&&c.p[1]===N-1){if(c.p[2]===N-1&&c.n[2]===1)tgt[i]=5;else if(c.p[2]===1-N&&c.n[2]===-1)tgt[i]=4;}});
+  for(const c of cb.cubies)if(c.st.length<3)for(const s of c.st)col[cidx[key(c.p,world(c,s))]]=faceOf[s.c];
+  let cur=col;
+  const delta=(S,cy)=>{
+    let r=0;
+    for(const t of cy){
+      const L=t.length,q=new Array(L);
+      for(let j=0;j<L;j++){let a=t[j];for(let i=S.length-1;i>=0;i--)a=cm[S[i]^1][a];q[j]=a;}
+      for(let j=0;j<L;j++){const a=q[j],b=q[(j+1)%L];r+=(cur[a]===tgt[b])-(cur[b]===tgt[b]);}
+    }
+    return r;
+  };
+  const out=[];
+  const apply=m=>{const n=new Uint8Array(C),p=cm[m];for(let i=0;i<C;i++)n[p[i]]=cur[i];cur=n;out.push(m);};
+  const done=()=>wingIdx.every(i=>cur[i]===tgt[i]);
+  /* Vorbereitung: Pool aus (Vorbereitung S, Folge K), Zyklen schon durch S umgerechnet */
+  if(!T.E){
+    T.E=[];
+    const Ss=[[]];for(let s=0;s<mv.length;s++)Ss.push([s]);
+    for(const S of Ss)for(let k=0;k<K.length;k++){
+      const cyc=K[k].cyc.map(t=>t.map(a=>{for(let i=S.length-1;i>=0;i--)a=cm[S[i]^1][a];return a;}));
+      T.E.push({S,k,cyc});
+    }
+  }
+  const E=T.E;
+  const dEntry=(e,cr)=>{
+    let r=0;
+    for(const q of e.cyc){const L=q.length;for(let j=0;j<L;j++){const a=q[j],b=q[(j+1)%L];r+=(cr[a]===tgt[b])-(cr[b]===tgt[b]);}}
+    return r;
+  };
+  const virt=(e,cr)=>{const n=cr.slice();for(const q of e.cyc){const L=q.length;for(let j=0;j<L;j++)n[q[(j+1)%L]]=cr[q[j]];}return n;};
+  const run=e=>{for(const m of e.S)apply(m);for(const m of K[e.k].seq)apply(m);for(const m of e.S.slice().reverse())apply(m^1);};
+  while(!done()){
+    let best=0,pick=null;
+    for(const e of E){const v=dEntry(e,cur);if(v>best){best=v;pick=e;if(v>=3&&e.S.length===0)break;}}
+    if(pick){run(pick);continue;}
+    /* Rückfall: zwei Schritte hintereinander, der erste darf kurz verschlechtern */
+    if(!T.by){T.by=Array.from({length:C},()=>[]);E.forEach((e,i)=>{const s=new Set();for(const q of e.cyc)for(const c of q)s.add(c);for(const c of s)T.by[c].push(i);});}
+    const touching=cr=>{const s=new Set();for(const i of wingIdx)if(cr[i]!==tgt[i])for(const j of T.by[i])s.add(j);return s;};
+    let pair=null;
+    let tries=0;
+    outer:for(const i1 of touching(cur)){
+      if(++tries>1500)break;
+      const e1=E[i1],d1=dEntry(e1,cur);
+      if(d1<-3)continue;
+      const c1=virt(e1,cur);
+      for(const i2 of touching(c1)){if(d1+dEntry(E[i2],c1)>=1){pair=[e1,E[i2]];break outer;}}
+    }
+    if(!pair)throw new Error("Kanten: Parität erkannt (Dreierzyklen reichen nicht)");
+    run(pair[0]);run(pair[1]);
+  }
+  return out.map(m=>mv[m]);
+}
+
+/* Zentren + Kanten. Bleiben die Kanten an einem ungeraden Tausch (Parität) hängen, wird vom Ausgangszustand
+   aus zuerst eine innere Schicht (oder zwei) gedreht, was die Parität der Kantenstücke kippt, die Zentren neu gelöst
+   und die Kanten erneut versucht. */
+function edgesSolve(cb){
+  const N=cb.n;
+  if(N<4)throw new Error("Kanten-Schritt gibt es erst ab 4×4.");
+  const pre=[[]];
+  for(let l=1;l<N-1;l++)pre.push([[0,l,1]]);
+  for(let l=1;l<N-1;l++)for(let k=l+1;k<N-1;k++)pre.push([[0,l,1],[1,k,1]]);
+  let last=null;
+  for(const p of pre){
+    const c=Object.assign(Object.create(Cube.prototype),{n:N,cubies:cb.cubies.map(x=>({p:x.p,R:x.R,st:x.st}))});
+    const res=[];
+    const run=ms=>{for(const m of ms){c.move(...m);res.push(m);}};
+    try{run(p);run(centersSolve(c));run(wingsSolve(c,N%2===0&&cornerParity(c)===1));return res;}
+    catch(e){if(!/Parität/.test(e.message))throw e;last=e;}
+  }
+  throw last;
+}
+
+/* Parität der Eckenpermutation (0 gerade, 1 ungerade), bezogen auf die Farben der Zentren */
+function cornerParity(cb){
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const fc={};
+  for(const x of cb.cubies)if(x.st.length===1)fc[x.st[0].c]=world(x,x.st[0]);
+  const id=v=>(v[0]>0?1:0)+(v[1]>0?2:0)+(v[2]>0?4:0),perm=new Array(8);
+  for(const x of cb.cubies)if(x.st.length===3)perm[id(x.p)]=id([0,1,2].map(i=>x.st.reduce((s,t)=>s+fc[t.c][i],0)));
+  let par=0;const seen=new Array(8).fill(false);
+  for(let i=0;i<8;i++)if(!seen[i]){let l=0,j=i;while(!seen[j]){seen[j]=true;j=perm[j];l++;}par^=(l-1)&1;}
+  return par;
+}
+
+/* Gelöste Zentren und Kanten vorausgesetzt: bildet Ecken und (Mittel-)Kanten auf einen 3×3 ab */
+function reduce3(cb){
+  const N=cb.n,m=N-1;
+  const world=(c,s)=>[0,1,2].map(i=>s.n0[0]*c.R[0][i]+s.n0[1]*c.R[1][i]+s.n0[2]*c.R[2][i]);
+  const faceCol={};
+  for(const c of cb.cubies)if(c.st.length===1)faceCol[world(c,c.st[0]).join()]=c.st[0].c;
+  const b=new Cube(3);
+  for(const c of b.cubies)for(const s of c.st)s.c=faceCol[s.n0.join()];
+  const cross=(u,v)=>[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+  const setKey=c=>c.st.map(s=>s.c).sort().join();
+  const big={};
+  for(const c of cb.cubies){
+    if(c.st.length===3||(c.st.length===2&&(N%2===0||c.p.includes(0))))big[setKey(c)]=big[setKey(c)]||c;
+  }
+  for(const c of b.cubies){
+    if(c.st.length<2)continue;
+    const P=big[setKey(c)];
+    c.p=P.p.map(v=>v===m?2:v===-m?-2:0);
+    const R=[null,null,null];
+    for(const s of c.st){
+      const ps=P.st.find(t=>t.c===s.c),w=world(P,ps),i=s.n0.findIndex(v=>v!==0);
+      R[i]=w.map(v=>v*s.n0[i]);
+    }
+    const k=R.findIndex(v=>v===null);
+    if(k>=0)R[k]=k===0?cross(R[1],R[2]):k===1?cross(R[2],R[0]):cross(R[0],R[1]);
+    c.R=R;
+  }
+  return b;
+}
+
+/* Vollständiger Solver (4×4 bis 6×6): Zentren, Kanten, dann als 3×3 */
+function fullSolve(cb){
+  const N=cb.n;
+  const pre=edgesSolve(cb);
+  const c=Object.assign(Object.create(Cube.prototype),{n:N,cubies:cb.cubies.map(x=>({p:x.p,R:x.R,st:x.st}))});
+  for(const m of pre)c.move(...m);
+  const sol=beginnerSolve(reduce3(c)).map(([a,l,d])=>[a,l===0?0:N-1,d]);
+  for(const m of sol)c.move(...m);
+  if(!c.isSolved())throw new Error("Solver: Würfel nach dem 3×3-Schritt nicht gelöst");
+  return pre.concat(sol);
+}
+
 /* ================= Solver-Schnittstelle =================
    Jeder Algorithmus: (cube, history) => Liste von Viertelzügen [[achse, schicht, richtung ±1], …]
    history = zusammengefasster Verlauf [[achse, schicht, 1 | 2 | -1], …] (nur für den Test-Solver gedacht)
@@ -332,10 +650,13 @@ const Solvers={
   "Anfängermethode (nur 3×3)":(cube)=>beginnerSolve(cube),
   "Anfängermethode (nur 2×2)":(cube)=>twoBeginner(cube),
   "Optimal per Breitensuche (nur 2×2)":(cube)=>twoOptimal(cube),
+  "Reduktion, Schritt 1: Zentren (ab 4×4)":(cube)=>centersSolve(cube),
+  "Reduktion komplett: Zentren, Kanten, 3×3 (4×4 bis 7×7)":(cube)=>fullSolve(cube),
+  "Reduktion, Schritt 1+2: Zentren und Kanten (4×4 bis 6×6)":(cube)=>edgesSolve(cube),
   "Verlauf rückwärts (Test)":(cube,hist)=>cube.isSolved()?[]:
     hist.slice().reverse().flatMap(([a,l,t])=>t===2?[[a,l,1],[a,l,1]]:[[a,l,-t]])
 };
-const SolverSizes={"Anfängermethode (nur 3×3)":[3],"Anfängermethode (nur 2×2)":[2],"Optimal per Breitensuche (nur 2×2)":[2]};
+const SolverSizes={"Anfängermethode (nur 3×3)":[3],"Anfängermethode (nur 2×2)":[2],"Optimal per Breitensuche (nur 2×2)":[2],"Reduktion, Schritt 1: Zentren (ab 4×4)":[4,5,6,7],"Reduktion, Schritt 1+2: Zentren und Kanten (4×4 bis 6×6)":[4,5,6],"Reduktion komplett: Zentren, Kanten, 3×3 (4×4 bis 7×7)":[4,5,6,7]};
 function fillSolvers(){
   const sel=$("sol"),keep=sel.value;sel.textContent="";
   for(const name of Object.keys(Solvers)){
