@@ -111,9 +111,11 @@ function beginnerTables(){
   const sets={
     corner:[...Um,...rots("R U R' U'")],
     middle:[...Um,...rots("U R U' R' U' F' U F"),...rots("U' L' U L U F U' F'")],
+    pair:[0,1,2,3].map(k=>[...Um,...["R U R'","R U' R'","R U2 R'","F' U' F","F' U F","F' U2 F","R U R' U'","F' U' F U","R U' R' U","F' U F U'","U R U' R' U' F' U F","U' L' U L U F U' F'"].map(s=>mac(rotS(s,k),false))]),
     topcross:[...Um,...rots("F R U R' U' F'")],
     orient:[...Um,...rots("R U R' U R U2 R'"),...rots("R U2 R' U' R U' R'")],
-    pll:[...Um,...rots("R U' R U R U R U' R' U' R2"),...rots("R U R' U' R' F R2 U' R' U' R U R' F'")]
+    pll:[...Um,...rots("R U' R U R U R U' R' U' R2"),...rots("R U R' U' R' F R2 U' R' U' R U R' F'")],
+    pll2:[...Um,...["R U' R U R U R U' R' U' R2","R2 U R U R' U' R' U' R' U R'","R U R' U' R' F R2 U' R' U' R U R' F'","F R U' R' U' R U R' F' R U R' U' R' F R F'","R2 U2 R U2 R2 U2 R2 U2 R U2 R2","R' F R' B2 R F' R' B2 R2","R2 B2 R F' R' B2 R F R","R U R' F' R U R' U' R' F R2 U' R'"].flatMap(s=>rots(s))]
   };
   /* Kreuz-Tabelle: Positionen der 8 Kreuz-Sticker, Breitensuche vom gelösten Zustand */
   const cp=[[[0,-2,2],[0,0,1],4],[[2,-2,0],[1,0,0],0],[[0,-2,-2],[0,0,-1],5],[[-2,-2,0],[-1,0,0],1]];
@@ -179,17 +181,46 @@ function beginnerSolve(c3){
     for(let L=0;L<=maxD;L++){const r=rec(0,-1,L);if(r>=0){apply(path.slice(0,r).flatMap(m=>mc[m].moves));return;}}
     throw new Error("Solver: keine Lösung gefunden");
   };
+  /* wie search, aber minimiert die Gesamtzahl der Züge statt der Anzahl der Formeln */
+  const searchCost=(mc,goal,maxC)=>{
+    const buf=Array.from({length:maxC+1},()=>new Uint8Array(54)),path=[];
+    buf[0].set(col);
+    const rec=(k,cost,last,L)=>{
+      if(goal(buf[k]))return k;
+      for(let m=0;m<mc.length;m++){
+        const c2=cost+mc[m].moves.length;
+        if(c2>L)continue;
+        if(mc[m].u&&last>=0&&mc[last].u)continue;
+        const pm=mc[m].perm,a=buf[k],b=buf[k+1];
+        for(let i=0;i<54;i++)b[pm[i]]=a[i];
+        path[k]=m;
+        const r=rec(k+1,c2,m,L);if(r>=0)return r;
+      }
+      return -1;
+    };
+    for(let L=0;L<=maxC;L++){const r=rec(0,0,-1,L);if(r>=0){apply(path.slice(0,r).flatMap(m=>mc[m].moves));return;}}
+    throw new Error("Solver: keine Lösung gefunden");
+  };
   apply(T.crossMoves(col));
   const crossN=out.length;
   const crossS=sel(s=>s.p[1]===-2&&nz(s.p)===2),dS=sel(s=>s.p[1]===-2);
   const pos=[[2,2],[2,-2],[-2,-2],[-2,2]];
-  let list=crossS;
-  for(const[x,z]of pos){list=list.concat(at(x,-2,z));search(sets.corner,goalOf(list),8);}
-  list=dS;
-  for(const[x,z]of pos){list=list.concat(at(x,0,z));search(sets.middle,goalOf(list),7);}
+  /* Erst Ecke und Kante eines Platzes gemeinsam einsetzen (kürzer); klappt das nicht, der klassische Weg */
+  const afterCross=[col,out.length];
+  let list=crossS,pairsOk=true;
+  try{
+    pos.forEach(([x,z],k)=>{list=list.concat(at(x,-2,z),at(x,0,z));searchCost(sets.pair[k],goalOf(list),11);});
+  }catch(e){pairsOk=false;col=afterCross[0];out.length=afterCross[1];}
+  if(!pairsOk){
+    list=crossS;
+    for(const[x,z]of pos){list=list.concat(at(x,-2,z));search(sets.corner,goalOf(list),8);}
+    list=dS;
+    for(const[x,z]of pos){list=list.concat(at(x,0,z));search(sets.middle,goalOf(list),7);}
+  }
   search(sets.topcross,goalOf(sel(s=>s.p[1]===2&&s.n[1]===1&&nz(s.p)===2)),6);
   search(sets.orient,goalOf(sel(s=>s.n[1]===1)),7);
-  search(sets.pll,c=>c.every((v,i)=>v===tgt[i]),7);
+  const fin=c=>c.every((v,i)=>v===tgt[i]);
+  try{search(sets.pll2,fin,4);}catch(e){search(sets.pll,fin,7);}
   /* Züge aus dem gedrehten Hilfswürfel zurück in die echte Lage übersetzen */
   const back=v=>{for(const[a,d]of[...plan].reverse())v=rot(v,a,-d);return v;};
   const res=[];let crossLen=0;
@@ -329,7 +360,7 @@ function twoBeginner(c2){
    Kommutatoren [A,B] (zwei Viertelzüge auf verschiedenen Achsen) darauf untersucht, ob sie genau
    drei Zentren-Felder im Kreis tauschen. Gierig wird dann immer der Dreierzyklus gewählt (ggf. mit
    1–2 Zügen Vorbereitung und deren Umkehrung), der am meisten Felder in die richtige Farbe bringt. */
-const CT={};
+const CT={},MAXC=18;
 function centerTables(N){
   if(CT[N])return CT[N];
   const key=(p,w)=>p+"|"+w;
@@ -348,11 +379,19 @@ function centerTables(N){
     if(mv[X][0]===mv[Y][0])continue;
     for(let B=0;B<mv.length;B++){
       const seq=[X,Y,X^1,B,X,Y^1,X^1,B^1],f=c=>{for(const m of seq)c=cm[m][c];return c;},moved=[];
-      for(let c=0;c<C;c++)if(f(c)!==c){moved.push(c);if(moved.length>3)break;}
-      if(moved.length!==3)continue;
-      const x0=moved[0],x1=f(x0),x2=f(x1);
-      if(seen.has([x0,x1,x2].join())||seen.has([x1,x2,x0].join())||seen.has([x2,x0,x1].join()))continue;
-      seen.add([x0,x1,x2].join());K.push({x:[x0,x1,x2],seq});
+      for(let c=0;c<C;c++)if(f(c)!==c){moved.push(c);if(moved.length>MAXC)break;}
+      if(moved.length<3||moved.length>MAXC||moved.length%3)continue;
+      const cyc=[],used=new Set();let good=true;
+      for(const c of moved){
+        if(used.has(c))continue;
+        const c1=f(c),c2=f(c1);
+        if(c1===c||c2===c||f(c2)!==c){good=false;break;}
+        used.add(c);used.add(c1);used.add(c2);cyc.push([c,c1,c2]);
+      }
+      if(!good)continue;
+      const id=cyc.map(t=>{const m=Math.min(...t),i=t.indexOf(m);return [t[i],t[(i+1)%3],t[(i+2)%3]].join();}).sort().join("|");
+      if(seen.has(id))continue;
+      seen.add(id);K.push({cyc,seq});
     }
   }
   return CT[N]={N,cells,C,mv,cm,K};
@@ -385,25 +424,28 @@ function centersSolve(cb){
   }
   if(!bestR)throw new Error("Zentren: Farbschema nicht bestimmbar");
   let col=Uint8Array.from(cur,v=>bestR[v]);
-  const delta=(a,b,d)=>(col[a]===tgt[b])-(col[b]===tgt[b])+(col[b]===tgt[d])-(col[d]===tgt[d])+(col[d]===tgt[a])-(col[a]===tgt[a]);
   const pre=(S,x)=>{for(let i=S.length-1;i>=0;i--)x=cm[S[i]^1][x];return x;};
   const out=[];
   const apply=m=>{const n=new Uint8Array(C),p=cm[m];for(let i=0;i<C;i++)n[p[i]]=col[i];col=n;out.push(m);};
   const done=()=>col.every((v,i)=>v===tgt[i]);
+  const dEntry=(S,cyc)=>{
+    let r=0;
+    for(const t of cyc){const a=pre(S,t[0]),b=pre(S,t[1]),d=pre(S,t[2]);r+=(col[a]===tgt[b])-(col[b]===tgt[b])+(col[b]===tgt[d])-(col[d]===tgt[d])+(col[d]===tgt[a])-(col[a]===tgt[a]);}
+    return r;
+  };
   while(!done()){
     let best=0,pick=null;
     const tryS=S=>{
       for(let k=0;k<K.length;k++){
-        const x=K[k].x,a=pre(S,x[0]),b=pre(S,x[1]),d=pre(S,x[2]),v=delta(a,b,d);
-        if(v>best){best=v;pick=[S,k];if(v===3)return true;}
+        const v=dEntry(S,K[k].cyc);
+        if(v<=0)continue;
+        const sc=v/(K[k].seq.length+2*S.length);
+        if(sc>best){best=sc;pick=[S,k];}
       }
-      return false;
     };
-    if(!tryS([])){
-      let hit=false;
-      for(let s=0;s<mv.length&&!hit;s++)hit=tryS([s]);
-      if(best<2&&!hit)for(let s=0;s<mv.length&&!hit;s++)for(let t=0;t<mv.length&&!hit;t++)hit=tryS([s,t]);
-    }
+    tryS([]);
+    for(let s=0;s<mv.length;s++)tryS([s]);
+    if(!pick)for(let s=0;s<mv.length&&!pick;s++)for(let t=0;t<mv.length;t++)tryS([s,t]);
     if(!pick)throw new Error("Zentren: keine Verbesserung gefunden");
     const[S,k]=pick;
     for(const m of S)apply(m);
@@ -432,7 +474,7 @@ function wingTables(N){
   }
   const centerIdx=[],wingIdx=[],midIdx=[];
   cells.forEach((c,i)=>{if(c.k===0)centerIdx.push(i);else if(!c.p.includes(0))wingIdx.push(i);else midIdx.push(i);});   // Mittelkanten ungerader Würfel gehören zum 3×3-Schritt
-  const face=cells.map(c=>c.n+""),MAXM=8,K=[],seen=new Set();
+  const face=cells.map(c=>c.n+""),MAXM=+(globalThis.WMAX||8),K=[],seen=new Set();
   const half=m=>[m,m];
   for(let X=0;X<mv.length;X++)for(let Y=0;Y<mv.length;Y++){
     if(mv[X][0]===mv[Y][0])continue;
@@ -548,7 +590,7 @@ function wingsSolve(cb,swap){
   const run=e=>{for(const m of e.S)apply(m);for(const m of K[e.k].seq)apply(m);for(const m of e.S.slice().reverse())apply(m^1);};
   while(!done()){
     let best=0,pick=null;
-    for(const e of E){const v=dEntry(e,cur);if(v>best){best=v;pick=e;if(v>=3&&e.S.length===0)break;}}
+    for(const e of E){const v=dEntry(e,cur);if(v<=0)continue;const sc=v/(K[e.k].seq.length+2*e.S.length);if(sc>best){best=sc;pick=e;}}
     if(pick){run(pick);continue;}
     /* Rückfall: zwei Schritte hintereinander, der erste darf kurz verschlechtern */
     if(!T.by){T.by=Array.from({length:C},()=>[]);E.forEach((e,i)=>{const s=new Set();for(const q of e.cyc)for(const c of q)s.add(c);for(const c of s)T.by[c].push(i);});}
@@ -642,6 +684,25 @@ function fullSolve(cb){
   return pre.concat(sol);
 }
 
+/* Züge zusammenfassen: Züge auf derselben Achse vertauschen miteinander, gleiche Schichten werden addiert (mod 4) */
+function simplifyMoves(ms){
+  const st=[];
+  for(const[a,l,d]of ms){
+    let merged=false;
+    for(let i=st.length-1;i>=0&&st[i][0]===a;i--){
+      if(st[i][1]===l){
+        const s=((st[i][2]+d)%4+4)%4;
+        if(s===0)st.splice(i,1);else st[i][2]=s===3?-1:s;
+        merged=true;break;
+      }
+    }
+    if(!merged)st.push([a,l,d]);
+  }
+  const out=[];
+  for(const[a,l,t]of st){if(t===2)out.push([a,l,1],[a,l,1]);else out.push([a,l,t]);}
+  return out;
+}
+
 /* ================= Solver-Schnittstelle =================
    Jeder Algorithmus: (cube, history) => Liste von Viertelzügen [[achse, schicht, richtung ±1], …]
    history = zusammengefasster Verlauf [[achse, schicht, 1 | 2 | -1], …] (nur für den Test-Solver gedacht)
@@ -656,6 +717,8 @@ const Solvers={
   "Verlauf rückwärts (Test)":(cube,hist)=>cube.isSolved()?[]:
     hist.slice().reverse().flatMap(([a,l,t])=>t===2?[[a,l,1],[a,l,1]]:[[a,l,-t]])
 };
+/* Alle Solver außer dem Test-Solver: Ergebnis zusammenfassen und kürzen */
+for(const n of Object.keys(Solvers)){if(!n.startsWith("Verlauf")){const f=Solvers[n];Solvers[n]=(c,hh)=>simplifyMoves(f(c,hh));}}
 const SolverSizes={"Anfängermethode (nur 3×3)":[3],"Anfängermethode (nur 2×2)":[2],"Optimal per Breitensuche (nur 2×2)":[2],"Reduktion, Schritt 1: Zentren (ab 4×4)":[4,5,6,7],"Reduktion, Schritt 1+2: Zentren und Kanten (4×4 bis 6×6)":[4,5,6],"Reduktion komplett: Zentren, Kanten, 3×3 (4×4 bis 7×7)":[4,5,6,7]};
 function fillSolvers(){
   const sel=$("sol"),keep=sel.value;sel.textContent="";
